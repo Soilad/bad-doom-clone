@@ -7,6 +7,8 @@
 #define SW2 (SCREEN_WIDTH/2.0f)
 #define SH2 (SCREEN_HEIGHT/2.0f)
 
+#define YSCALE (float)SCREEN_WIDTH/SCREEN_HEIGHT
+
 #define DEG2RAD (M_PI/180.0f)
 #define EPSILON 0.000001f
 
@@ -45,6 +47,12 @@ typedef struct
 
 typedef struct
 {
+	LineSegment *items;
+	size_t len;
+} SegmentArray;
+
+typedef struct
+{
 	LineSegment *line_seg;
 	float floor_height, ceiling_height;
 	SDL_Surface *tex;
@@ -75,25 +83,33 @@ typedef struct
 	LineSegment *line_segs;
 } Sector;
 
-// Either a subsector or node
+typedef struct
+{
+	Sector *items[128];
+	size_t len;
+} SectorPointerArray;
+
 typedef struct Node
 {
 	LineSegment splitter;
 	int left;
 	int right;
-	SDL_bool left_is_sector;
-	SDL_bool right_is_sector;
 } Node;
 
 typedef struct
 {
-	PlayerCam player_cam;
 	pol_Vec2 *vertices;
 	size_t num_vertices;
 	Node *nodes;
 	size_t num_nodes;
 	Sector *sectors;
 	size_t num_sectors;
+} Level;
+
+typedef struct
+{
+	PlayerCam player_cam;
+	Level level;
 } GameState;
 
 typedef enum
@@ -111,7 +127,6 @@ typedef enum
 } pol_Key;
 
 SDL_bool global_is_running = SDL_TRUE;
-float global_yScale = (float)SCREEN_WIDTH/SCREEN_HEIGHT;
 float global_focal_length;
 
 inline float vec2_dot_product(pol_Vec2 v1, pol_Vec2 v2)
@@ -123,7 +138,6 @@ inline float vec2_cross_product(pol_Vec2 v1, pol_Vec2 v2)
 {
 	return v1.x * v2.y - v1.y*v2.x;
 }
-
 
 pol_Vec2 vec2_rotate(pol_Vec2 v, float angle)
 {
@@ -283,7 +297,7 @@ void draw_plane_column(pol_Color *pixels, SDL_Surface *tex, DrawPlaneColumn *col
 
 	for (int y = start_row; y <= end_row; y++)
 	{
-		float normalized_y = (SH2 - y + 0.5f) / (SH2 * global_yScale);
+		float normalized_y = (SH2 - y + 0.5f) / (SH2 * YSCALE);
 
 		pol_Vec2 floor;
 		floor.y = view_plane_height * global_focal_length / normalized_y;
@@ -313,8 +327,8 @@ void draw_plane_column(pol_Color *pixels, SDL_Surface *tex, DrawPlaneColumn *col
 void render_line_segment(pol_Color *pixels, GameState *game, DrawSegment *draw_seg)
 {
 	LineSegment *line_seg = draw_seg->line_seg;
-	pol_Vec2 v1 = game->vertices[line_seg->v1];
-	pol_Vec2 v2 = game->vertices[line_seg->v2];
+	pol_Vec2 v1 = game->level.vertices[line_seg->v1];
+	pol_Vec2 v2 = game->level.vertices[line_seg->v2];
 	float floor_height = draw_seg->floor_height;
 	float ceiling_height = draw_seg->ceiling_height;
 	SDL_Surface *tex = draw_seg->tex;
@@ -388,10 +402,10 @@ void render_line_segment(pol_Color *pixels, GameState *game, DrawSegment *draw_s
 	// Screen coordinates
 	float screen_x1 = SW2 + normalized_x1 * SW2;
 	float screen_x2 = SW2 + normalized_x2 * SW2;
-	float screen_y1a = SH2 - normalized_y1a * SH2 * global_yScale;
-	float screen_y1b = SH2 - normalized_y1b * SH2 * global_yScale;
-	float screen_y2a = SH2 - normalized_y2a * SH2 * global_yScale;
-	float screen_y2b = SH2 - normalized_y2b * SH2 * global_yScale;
+	float screen_y1a = SH2 - normalized_y1a * SH2 * YSCALE;
+	float screen_y1b = SH2 - normalized_y1b * SH2 * YSCALE;
+	float screen_y2a = SH2 - normalized_y2a * SH2 * YSCALE;
+	float screen_y2b = SH2 - normalized_y2b * SH2 * YSCALE;
 
 	float deltax = screen_x2 - screen_x1;
 	if (SDL_fabsf(deltax) < EPSILON)
@@ -501,7 +515,7 @@ pol_Key translate_scancode_to_pol_key(SDL_Scancode scancode)
 	}
 }
 
-void handleKeyEvent(SDL_Event *event, SDL_bool *keys)
+void handle_key_event(SDL_Event *event, SDL_bool *keys)
 {
 	if (event->type == SDL_KEYDOWN)
 	{
@@ -523,13 +537,11 @@ void handleKeyEvent(SDL_Event *event, SDL_bool *keys)
 	}
 }
 
-void clear_screenbuffer(pol_Color *screen_buffer)
+SDL_bool is_convex(SegmentArray *segments_list, pol_Vec2 *vertices)
 {
-	memset(screen_buffer, 0, SCREEN_WIDTH*SCREEN_HEIGHT*sizeof(pol_Color));
-}
+	LineSegment *segments = segments_list->items;
+	size_t num_segments = segments_list->len;
 
-SDL_bool is_convex(LineSegment *segments, pol_Vec2 *vertices, int num_segments)
-{
 	for (int i = 0; i < num_segments; i++)
 	{
 		pol_Vec2 v1 = vertices[segments[i].v1];
@@ -558,10 +570,13 @@ SDL_bool is_convex(LineSegment *segments, pol_Vec2 *vertices, int num_segments)
 	return SDL_TRUE;
 }
 
-void split_segments(LineSegment *segments, int num_segs, LineSegment **outleft, LineSegment **outright, int *outnum_left, int *outnum_right, GameState *game)
+void split_segments(SegmentArray *segments_list, SegmentArray *outleft, SegmentArray *outright, Level *level)
 {
-	pol_Vec2 split_v1 = game->vertices[segments->v1];
-	pol_Vec2 split_v2 = game->vertices[segments->v2];
+	LineSegment *segments = segments_list->items;
+	size_t num_segs = segments_list->len;
+
+	pol_Vec2 split_v1 = level->vertices[segments->v1];
+	pol_Vec2 split_v2 = level->vertices[segments->v2];
 
 	LineSegment *left = NULL;
 	LineSegment *right = NULL;
@@ -571,8 +586,8 @@ void split_segments(LineSegment *segments, int num_segs, LineSegment **outleft, 
 	// Copy segments and put them in either the left or right list
 	for (int i = 1; i < num_segs; i++)
 	{
-		pol_Vec2 *v1 = game->vertices + segments[i].v1;
-		pol_Vec2 *v2 = game->vertices + segments[i].v2;
+		pol_Vec2 *v1 = level->vertices + segments[i].v1;
+		pol_Vec2 *v2 = level->vertices + segments[i].v2;
 
 		int a = point_on_side(split_v1, split_v2, *v1);
 		int b = point_on_side(split_v1, split_v2, *v2);
@@ -581,25 +596,24 @@ void split_segments(LineSegment *segments, int num_segs, LineSegment **outleft, 
 		if (a * b == -1)
 		{
 			pol_Vec2 split_point = line_intersect(split_v1, split_v2, *v1, *v2);
-			// This explodes!
-			game->vertices = SDL_realloc(game->vertices, sizeof(pol_Vec2)*(game->num_vertices+1));
-			game->vertices[game->num_vertices] = split_point;
+			level->vertices = SDL_realloc(level->vertices, sizeof(pol_Vec2)*(level->num_vertices+1));
+			level->vertices[level->num_vertices] = split_point;
 
 			left = SDL_realloc(left, sizeof(LineSegment)*(num_left+1));
 			right = SDL_realloc(right, sizeof(LineSegment)*(num_right+1));
 
 			if (a == -1)
 			{
-				left[num_left++] = (LineSegment){segments[i].v1, game->num_vertices};
-				right[num_right++] = (LineSegment){game->num_vertices, segments[i].v2};
+				left[num_left++] = (LineSegment){segments[i].v1, level->num_vertices};
+				right[num_right++] = (LineSegment){level->num_vertices, segments[i].v2};
 			}
 			else
 			{
-				right[num_right++] = (LineSegment){segments[i].v1, game->num_vertices};
-				left[num_left++] = (LineSegment){game->num_vertices, segments[i].v2};
+				right[num_right++] = (LineSegment){segments[i].v1, level->num_vertices};
+				left[num_left++] = (LineSegment){level->num_vertices, segments[i].v2};
 			}
 
-			game->num_vertices++;
+			level->num_vertices++;
 
 			continue;
 		}
@@ -633,71 +647,128 @@ void split_segments(LineSegment *segments, int num_segs, LineSegment **outleft, 
 		left[num_left++] = segments[0];
 	}
 
-	*outleft = left;
-	*outright = right;
-	*outnum_left = num_left;
-	*outnum_right = num_right;
+	outleft->items = left;
+	outright->items = right;
+	outleft->len = num_left;
+	outright->len = num_right;
 }
 
-int generate_bsp_tree(LineSegment* line_segments, int num_segs, GameState *game)
+
+int create_node(SegmentArray *segments, Level *level)
 {
 	Node node;
-	node.splitter = line_segments[0];
+	node.splitter = segments->items[0];
 
-	LineSegment *left;
-	LineSegment *right;
-	int num_left, num_right;
-	split_segments(line_segments, num_segs, &left, &right, &num_left, &num_right, game);
-	SDL_free(line_segments);
+	SegmentArray left;
+	SegmentArray right;
+	split_segments(segments, &left, &right, level);
+	SDL_free(segments->items);
 
-	int node_index = game->num_nodes;
-	game->nodes = SDL_realloc(game->nodes, sizeof(Node)*(++game->num_nodes));
+	int node_index = level->num_nodes++;
+	level->nodes = SDL_realloc(level->nodes, sizeof(Node)*(level->num_nodes));
 
-	if (!is_convex(left, game->vertices, num_left))
+	if (!is_convex(&left, level->vertices))
 	{
-		node.left_is_sector = SDL_FALSE;
-		node.left = generate_bsp_tree(left, num_left, game);
+		node.left = create_node(&left, level);
 	}
 	else
 	{
-		node.left_is_sector = SDL_TRUE;
-		game->sectors = realloc(game->sectors, sizeof(Sector)*(game->num_sectors+1));
-		game->sectors[game->num_sectors].num_segments = num_left;
-		game->sectors[game->num_sectors].line_segs = left;
-		node.left = game->num_sectors | SECTOR_FLAG;
-		game->num_sectors++;
+		level->sectors = realloc(level->sectors, sizeof(Sector)*(level->num_sectors+1));
+		level->sectors[level->num_sectors].num_segments = left.len;
+		level->sectors[level->num_sectors].line_segs = left.items;
+		node.left = level->num_sectors | SECTOR_FLAG;
+		level->num_sectors++;
 	}
 
-	if (!is_convex(right, game->vertices, num_right))
+	if (!is_convex(&right, level->vertices))
 	{
-		node.right_is_sector = SDL_FALSE;
-		node.right = generate_bsp_tree(right, num_right, game);
+		node.right = create_node(&right, level);
 	}
 	else
 	{
-		node.right_is_sector = SDL_TRUE;
-		game->sectors = realloc(game->sectors, sizeof(Sector)*(game->num_sectors+1));
-		game->sectors[game->num_sectors].num_segments = num_right;
-		game->sectors[game->num_sectors].line_segs = right;
-		node.right = game->num_sectors | SECTOR_FLAG;
-		game->num_sectors++;
+		level->sectors = realloc(level->sectors, sizeof(Sector)*(level->num_sectors+1));
+		level->sectors[level->num_sectors].num_segments = right.len;
+		level->sectors[level->num_sectors].line_segs = right.items;
+		node.right = level->num_sectors | SECTOR_FLAG;
+		level->num_sectors++;
 	}
 
-	game->nodes[node_index] = node;
+	level->nodes[node_index] = node;
 
 	return node_index;
 }
 
+void render_bsp(int node, SectorPointerArray *draw_sectors, GameState *game)
+{
+	if (node & SECTOR_FLAG)
+	{
+		if (draw_sectors->len >= 128)
+			return;
+
+		int sector_index = node&(~SECTOR_FLAG);
+		Sector *s = &game->level.sectors[sector_index];
+		draw_sectors->items[draw_sectors->len++] = s;
+
+		return;
+	}
+
+	Node *n = &game->level.nodes[node];
+	pol_Vec2 v1 = game->level.vertices[n->splitter.v1];
+	pol_Vec2 v2 = game->level.vertices[n->splitter.v2];
+	int side = point_on_side(v1, v2, game->player_cam.pos);
+
+	if (side == 1)
+	{
+		render_bsp(n->right, draw_sectors, game);
+		render_bsp(n->left, draw_sectors, game);
+	}
+	else
+	{
+		render_bsp(n->left, draw_sectors, game);
+		render_bsp(n->right, draw_sectors, game);
+	}
+}
+
+void generate_bsp_tree(Level *level)
+{
+	LineSegment segments_data[] = {
+		// Pillar
+		{14, 15},
+		{15, 16},
+		{16, 17},
+		{17, 14},
+
+		// Room
+		{0, 1},
+		{1, 2},
+		{2, 3},
+		{3, 4},
+		{4, 5},
+		{5, 6},
+		{6, 7},
+		{7, 8},
+		{8, 9},
+		{9, 10},
+		{10, 11},
+		{11, 12},
+		{12, 13},
+		{13, 0}
+
+	};
+	SegmentArray segments;
+	segments.len = sizeof(segments_data)/sizeof(segments_data[0]);
+	segments.items = SDL_malloc(sizeof(LineSegment)*segments.len);
+	SDL_memcpy(segments.items, segments_data, sizeof(LineSegment)*segments.len);
+
+	create_node(&segments, level);
+}
+
 void init_game(GameState *game)
 {
-	game->player_cam = (PlayerCam){
-			.height = 40.0f,
-			.view_angle = 90.0f*DEG2RAD
-		},
+	game->player_cam.height = 40.0f;
+	game->player_cam.view_angle = 90.0f*DEG2RAD;
 
-	game->num_vertices = 18,
-	game->vertices = SDL_malloc(sizeof(pol_Vec2)*18);
-	pol_Vec2 vertices_data[18] = {
+	pol_Vec2 vertices_data[] = {
 		{-256,  256},
 		{-128,  256},
 		{-128,  128},
@@ -719,45 +790,16 @@ void init_game(GameState *game)
 		{-32,   -32},
 		{ 32,   -32}
 	};
-	SDL_memcpy(game->vertices, vertices_data, sizeof(pol_Vec2)*18);
-}
 
-SDL_Surface *walltex;
-Sector *sectors_to_draw[128];
-int num_sectors_to_draw = 0;
+	game->level.num_vertices = sizeof(vertices_data)/sizeof(vertices_data[0]),
+	game->level.vertices = SDL_malloc(sizeof(pol_Vec2)*game->level.num_vertices);
+	SDL_memcpy(game->level.vertices, vertices_data, sizeof(pol_Vec2)*game->level.num_vertices);
 
-void render_bsp(int node, GameState *game, pol_Color *pixels)
-{
-	if (node & SECTOR_FLAG)
-	{
-		int sector_index = node&(~SECTOR_FLAG);
-		Sector *s = &game->sectors[sector_index];
-		sectors_to_draw[num_sectors_to_draw++] = s;
-
-
-		return;
-	}
-
-	Node *n = &game->nodes[node];
-	pol_Vec2 v1 = game->vertices[n->splitter.v1];
-	pol_Vec2 v2 = game->vertices[n->splitter.v2];
-	int side = point_on_side(v1, v2, game->player_cam.pos);
-
-	if (side == 1)
-	{
-		render_bsp(n->right, game, pixels);
-		render_bsp(n->left, game, pixels);
-	}
-	else
-	{
-		render_bsp(n->left, game, pixels);
-		render_bsp(n->right, game, pixels);
-	}
+	generate_bsp_tree(&game->level);
 }
 
 int main()
 {
-	// NOTE(pol): SDL_CreateWindow calls SDL_Init(SDL_INIT_VIDEO) implicitly
 	SDL_Window *window = SDL_CreateWindow(
 		"My window",
 		SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
@@ -790,10 +832,13 @@ int main()
 
 	SDL_bool keys[POL_KEY_COUNT] = {0};
 
+	// Count FPS
 	Uint32 startTime = SDL_GetTicks();
 	Uint32 elapsedTime = 0;
 	int frameCount = 0;
 
+	pol_Color *screen_buffer;
+	int pitch;
 	SDL_Texture *screen_texture = SDL_CreateTexture(
 		renderer,
 		SDL_PIXELFORMAT_ABGR8888,
@@ -802,10 +847,7 @@ int main()
 		SCREEN_HEIGHT
 	);
 
-	walltex = IMG_Load("greenman.png");
-
-	pol_Color *screen_buffer;
-	int pitch;
+	SDL_Surface *walltex = IMG_Load("greenman.png");
 
 	float floor_height = 0.0f;
 	float ceiling_height = 64.0f;
@@ -813,36 +855,9 @@ int main()
 	GameState game = {0};
 	init_game(&game);
 
-	LineSegment line_segments_data[18] = {
-		{0, 1},
-		{1, 2},
-		{2, 3},
-		{3, 4},
-		{4, 5},
-		{5, 6},
-		{6, 7},
-
-		{7, 8},
-		{8, 9},
-		{9, 10},
-		{10, 11},
-		{11, 12},
-		{12, 13},
-		{13, 0},
-
-		{14, 15},
-		{15, 16},
-		{16, 17},
-		{17, 14}
-	};
-
-	int num_segments = sizeof(line_segments_data)/sizeof(line_segments_data[0]);
-	LineSegment *line_segments = SDL_malloc(sizeof(LineSegment)*num_segments);
-	SDL_memcpy(line_segments, line_segments_data, sizeof(LineSegment)*num_segments);
-
-	generate_bsp_tree(line_segments, 18, &game);
-
 	global_focal_length = 1/SDL_tanf(FOV/2);
+
+	SectorPointerArray draw_sectors = {0};
 
 	SDL_Event event;
 	while(global_is_running)
@@ -859,7 +874,7 @@ int main()
 				case SDL_KEYUP:
 				case SDL_KEYDOWN:
 				{
-					handleKeyEvent(&event, keys);
+					handle_key_event(&event, keys);
 				} break;
 			}
 		}
@@ -894,20 +909,18 @@ int main()
 		if (keys[POL_KEY_DESCEND])
 			game.player_cam.height -= 0.5;
 
-		SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
-		SDL_RenderClear(renderer);
-
-		SDL_LockTexture(screen_texture, NULL,(void*)&screen_buffer, &pitch);
+		SDL_LockTexture(screen_texture, NULL, (void*)&screen_buffer, &pitch);
 		{
-			num_sectors_to_draw = 0;
+			draw_sectors.len = 0;
 
-			clear_screenbuffer(screen_buffer);
+			// memset(screen_buffer, 0, SCREEN_WIDTH*SCREEN_HEIGHT*sizeof(pol_Color));
 
-			render_bsp(0, &game, screen_buffer);
+			render_bsp(0, &draw_sectors, &game);
 
-			for (int j = num_sectors_to_draw-1; j >= 0; j--)
+			// Render far to near
+			for (int j = draw_sectors.len-1; j >= 0; j--)
 			{
-				Sector *s = sectors_to_draw[j];
+				Sector *s = draw_sectors.items[j];
 
 				for (int i = 0; i < s->num_segments; i++)
 				{

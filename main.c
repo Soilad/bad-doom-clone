@@ -115,6 +115,7 @@ typedef struct
 typedef enum
 {
 	POL_KEY_FORWARD,
+	POL_KEY_SPEED,
 	POL_KEY_BACK,
 	POL_KEY_STRAFE_RIGHT,
 	POL_KEY_STRAFE_LEFT,
@@ -495,6 +496,9 @@ pol_Key translate_scancode_to_pol_key(SDL_Scancode scancode)
 	{
 		case SDL_SCANCODE_UP:
 		case SDL_SCANCODE_W: return POL_KEY_FORWARD;
+
+
+		case SDL_SCANCODE_LSHIFT: return POL_KEY_SPEED;
 
 		case SDL_SCANCODE_S:
 		case SDL_SCANCODE_DOWN: return POL_KEY_BACK;
@@ -884,6 +888,11 @@ int main()
 		if (keys[POL_KEY_TURN_LEFT])
 			game.player_cam.view_angle += 0.04f;
 
+		if (keys[POL_KEY_SPEED])
+		{
+			game.player_cam.pos.x += SDL_cosf(game.player_cam.view_angle)*2;
+			game.player_cam.pos.y += SDL_sinf(game.player_cam.view_angle)*2;
+		}
 		if (keys[POL_KEY_FORWARD])
 		{
 			game.player_cam.pos.x += SDL_cosf(game.player_cam.view_angle);
